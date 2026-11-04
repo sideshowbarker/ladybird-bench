@@ -274,9 +274,11 @@ jobs:
           key: noise-floor-${{ inputs.runner }}-${{ github.run_id }}
           restore-keys: noise-floor-${{ inputs.runner }}-
 
+      # A measured round takes 16 to 18 minutes on a 3-core macOS runner, so the measurement needs about 165 minutes,
+      # and the build gets what's left of the 360-minute job. A cold build that runs out of time still saves the caches.
       - name: Build both arms
         id: build
-        timeout-minutes: 240
+        timeout-minutes: 150
         env:
           HEAD_SHA: ${{ steps.revisions.outputs.head }}
           BASE_SHA: ${{ steps.revisions.outputs.base }}
@@ -304,7 +306,7 @@ jobs:
           key: vcpkg-${{ inputs.runner }}-${{ steps.revisions.outputs.vcpkg_key }}
 
       - name: Measure
-        timeout-minutes: 110
+        timeout-minutes: 195
         env:
           HEAD_SHA: ${{ steps.revisions.outputs.head }}
           BASE_SHA: ${{ steps.revisions.outputs.base }}
