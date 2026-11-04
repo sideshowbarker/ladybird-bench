@@ -280,6 +280,10 @@ jobs:
         env:
           HEAD_SHA: ${{ steps.revisions.outputs.head }}
           BASE_SHA: ${{ steps.revisions.outputs.base }}
+          # Ladybird builds Rust with -Ctarget-cpu=native, which in a macOS VM names a CPU without the features the
+          # ring crate asserts at compile time. RUSTFLAGS takes precedence over the per-target flags the build sets, so
+          # this pins the same CPU CI's baseline-CPU builds use. -Dwarnings is the other per-target flag.
+          RUSTFLAGS: -Dwarnings -Ctarget-cpu=apple-m1
         run: bash harness/ci/phase.sh build
 
       # Saved even when the build failed or timed out, so the next run starts warm.
