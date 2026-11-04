@@ -9,11 +9,12 @@
 #
 # On Linux, this runs inside the ladybird-ci container as root; on macOS, directly on the runner.
 #
-# Inputs, from the environment: MODE (calibrate or compare), HEAD_SHA, BASE_SHA, ROUNDS, BENCHMARKS, FOCUS.
+# Inputs, from the environment: MODE (calibrate or compare), HEAD_SHA, BASE_SHA, ROUNDS, BENCHMARKS, EXCLUDE, FOCUS.
 set -euo pipefail
 
 phase=${1:?usage: phase.sh build|measure}
 work=${WORK:-/work}
+export WORK=$work
 os=$(uname -s)
 
 export XDG_CACHE_HOME=$work/cache
@@ -79,7 +80,19 @@ measure)
 
     args=(--ladybird "$work/src" --worktree-root "$work/worktrees" --rounds "$ROUNDS" -o "$work/out/pr-perf-section.md")
     [ "$MODE" = calibrate ] && args+=(--calibrate)
-    [ -n "${BENCHMARKS:-}" ] && args+=(--benchmarks "$BENCHMARKS")
+    suites=${BENCHMARKS:-}
+    if [ -z "$suites" ] && [ -n "${EXCLUDE:-}" ]; then
+        # Every suite bench_pr.py runs by default, less the excluded ones.
+        suites=$("$python" - <<'PYEOF2'
+import os, sys
+sys.path.insert(0, os.path.join(os.environ["WORK"], "web-benchmarks"))
+import bench_plan
+excluded = set(os.environ["EXCLUDE"].replace(",", " ").split())
+print(",".join(s for s in bench_plan.default_suites() if s not in excluded))
+PYEOF2
+)
+    fi
+    [ -n "$suites" ] && args+=(--benchmarks "$suites")
     if [ -n "${FOCUS:-}" ]; then
         read -r -a focus <<< "$FOCUS"
         args+=(--focus "${focus[@]}")

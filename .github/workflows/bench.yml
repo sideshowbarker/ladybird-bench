@@ -26,6 +26,9 @@ on:
       benchmarks:
         description: 'Comma-separated suites (empty: all)'
         default: ''
+      exclude:
+        description: 'Suites left out when benchmarks is empty (WebKitCSS/WhereIsClassRuleIndexing hangs on master, 2026-11)'
+        default: 'WebKitCSS'
       focus:
         description: 'Space-separated suites or Benchmark/test keys judged as their own family'
         default: ''
@@ -46,6 +49,7 @@ env:
   BENCHMARKS_REF: ${{ inputs.benchmarks_ref }}
   ROUNDS: ${{ inputs.rounds }}
   BENCHMARKS: ${{ inputs.benchmarks }}
+  EXCLUDE: ${{ inputs.exclude }}
   FOCUS: ${{ inputs.focus }}
   RUNNER_LABEL: ${{ inputs.runner }}
 
@@ -112,7 +116,7 @@ jobs:
           BASE_SHA: ${{ steps.revisions.outputs.base }}
         run: |
           docker run --rm --init --shm-size=4g -v "$WORK:/work" -v "$GITHUB_WORKSPACE/harness/ci:/ci:ro" \
-              -e MODE -e HEAD_SHA -e BASE_SHA -e ROUNDS -e BENCHMARKS -e FOCUS \
+              -e MODE -e HEAD_SHA -e BASE_SHA -e ROUNDS -e BENCHMARKS -e EXCLUDE -e FOCUS \
               "${{ steps.revisions.outputs.image }}" bash /ci/phase.sh build
 
       # The container runs as root; let the runner user read what it wrote, for the cache saves and the upload.
@@ -144,7 +148,7 @@ jobs:
           BASE_SHA: ${{ steps.revisions.outputs.base }}
         run: |
           docker run --rm --init --shm-size=4g -v "$WORK:/work" -v "$GITHUB_WORKSPACE/harness/ci:/ci:ro" \
-              -e MODE -e HEAD_SHA -e BASE_SHA -e ROUNDS -e BENCHMARKS -e FOCUS \
+              -e MODE -e HEAD_SHA -e BASE_SHA -e ROUNDS -e BENCHMARKS -e EXCLUDE -e FOCUS \
               "${{ steps.revisions.outputs.image }}" bash /ci/phase.sh measure
 
       - name: Save the calibration record

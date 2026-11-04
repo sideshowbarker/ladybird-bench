@@ -15,6 +15,10 @@ run fills the caches, and the spread across runs shows how much a runner type va
 reports its resolution (median and p90) and its false movers in the job summary. Compare that with the macOS laptop’s
 calibration (±7.3% at p90): A runner type is usable when it reports 0 false movers and a p90 near that.
 
+The exclude input (WebKitCSS by default, since WebKitCSS/WhereIsClassRuleIndexing hangs on master) leaves suites out of
+a run. A calibration over less than the whole battery still reports its resolution, but bench_pr.py doesn’t record it
+as the runner’s calibration.
+
 ## Measure a branch
 
     gh workflow run bench.yml -R sideshowbarker/ladybird-bench -f mode=compare -f ladybird_ref=<branch-or-sha>
