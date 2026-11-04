@@ -2,19 +2,18 @@
 
 Runs web-benchmarks’ bench_pr.py on GitHub-hosted runners, so that a measurement needs no local machine.
 
-One manually dispatched job builds both arms with bench_pr.py’s own recipe, inside the ladybird-ci image that the
-measured commit’s CI uses. It saves the compiler and vcpkg caches, then measures. The build is a separate step, so a
-first run that runs out of time still leaves the next one a warm cache.
+One manually dispatched job builds both arms with bench_pr.py’s own recipe: on Linux inside the ladybird-ci image
+that the measured commit’s CI uses, and on macOS directly on the runner. It saves the compiler and vcpkg caches, then
+measures. The build is a separate step, so a first run that runs out of time still leaves the next one a warm cache.
 
 ## Calibrate a runner type
 
     gh workflow run bench.yml -R sideshowbarker/ladybird-bench -f mode=calibrate -f runner=ubuntu-24.04
-    gh workflow run bench.yml -R sideshowbarker/ladybird-bench -f mode=calibrate -f runner=ubuntu-24.04-arm
 
-Run each at least three times: The first run fills the caches, and the spread across runs shows how much a runner
-type varies from one VM to the next. Each run reports its resolution (median and p90) and its false movers in the job
-summary. Compare that with the macOS laptop’s calibration (±7.3% at p90): A runner type is usable when it reports
-0 false movers and a p90 near that.
+The runner is one of ubuntu-24.04, ubuntu-24.04-arm, macos-26, and macos-15. Run each at least three times: The first
+run fills the caches, and the spread across runs shows how much a runner type varies from one VM to the next. Each run
+reports its resolution (median and p90) and its false movers in the job summary. Compare that with the macOS laptop’s
+calibration (±7.3% at p90): A runner type is usable when it reports 0 false movers and a p90 near that.
 
 ## Measure a branch
 

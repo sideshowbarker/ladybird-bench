@@ -18,7 +18,7 @@ on:
         default: ''
       runner:
         type: choice
-        options: [ubuntu-24.04, ubuntu-24.04-arm]
+        options: [ubuntu-24.04, ubuntu-24.04-arm, macos-26, macos-15]
         default: ubuntu-24.04
       rounds:
         description: 'Kept rounds per arm (even)'
@@ -37,18 +37,23 @@ on:
 permissions:
   contents: read
 
+env:
+  WORK: ${{ github.workspace }}/work
+  MODE: ${{ inputs.mode }}
+  LADYBIRD_REPO: ${{ inputs.ladybird_repo }}
+  LADYBIRD_REF: ${{ inputs.ladybird_ref }}
+  BENCHMARKS_REPO: ${{ inputs.benchmarks_repo }}
+  BENCHMARKS_REF: ${{ inputs.benchmarks_ref }}
+  ROUNDS: ${{ inputs.rounds }}
+  BENCHMARKS: ${{ inputs.benchmarks }}
+  FOCUS: ${{ inputs.focus }}
+  RUNNER_LABEL: ${{ inputs.runner }}
+
 jobs:
-  bench:
+  linux:
+    if: startsWith(inputs.runner, 'ubuntu')
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 360
-    env:
-      WORK: ${{ github.workspace }}/work
-      MODE: ${{ inputs.mode }}
-      LADYBIRD_REPO: ${{ inputs.ladybird_repo }}
-      LADYBIRD_REF: ${{ inputs.ladybird_ref }}
-      ROUNDS: ${{ inputs.rounds }}
-      BENCHMARKS: ${{ inputs.benchmarks }}
-      FOCUS: ${{ inputs.focus }}
 
     steps:
       - uses: actions/checkout@v7.0.1
@@ -57,67 +62,17 @@ jobs:
 
       - name: Free disk space
         run: |
-          df -h /
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
               /usr/local/share/boost /usr/local/.ghcup /usr/share/swift
           df -h /
 
       - name: Describe the machine
         id: machine
-        run: |
-          model=$(lscpu | sed -n 's/^Model name: *//p' | head -1)
-          echo "cpu_key=$(uname -m)-$(printf '%s' "$model" | tr -c 'A-Za-z0-9' '-')" >> "$GITHUB_OUTPUT"
-          {
-            echo "### Machine"
-            echo
-            echo "- Runner: ${{ inputs.runner }}"
-            echo "- CPU: ${model}, $(nproc) vCPUs"
-            echo "- Memory: $(free -g | awk '/^Mem:/ { print $2 }') GiB"
-            echo "- Kernel: $(uname -r)"
-            echo
-          } >> "$GITHUB_STEP_SUMMARY"
+        run: bash harness/ci/describe-machine.sh
 
       - name: Check out Ladybird and the benchmarks
         id: revisions
-        run: |
-          mkdir -p "$WORK"
-          git clone --quiet --filter=blob:none https://github.com/LadybirdBrowser/ladybird.git "$WORK/src"
-          cd "$WORK/src"
-          if [ -n "$LADYBIRD_REF" ]; then
-            git fetch --quiet --filter=blob:none "https://github.com/${LADYBIRD_REPO}.git" "$LADYBIRD_REF"
-            head=$(git rev-parse FETCH_HEAD)
-          else
-            head=$(git rev-parse origin/master)
-          fi
-          git checkout --quiet --detach "$head"
-          if [ "$MODE" = calibrate ]; then
-            base=$head
-          else
-            base=$(git merge-base "$head" origin/master)
-            if [ "$base" = "$head" ]; then
-              echo "::error::$head is already on master, so there's nothing to compare."
-              exit 1
-            fi
-          fi
-          image=$(git show "$head:.github/workflows/ci.yml" | grep -o 'ghcr.io/ladybirdbrowser/ladybird-ci:[0-9.]*' | head -1)
-          [ -n "$image" ] || { echo "::error::No ladybird-ci image named in ci.yml at $head"; exit 1; }
-          {
-            echo "head=$head"
-            echo "base=$base"
-            echo "image=$image"
-            echo "vcpkg_key=$(git show "$head:vcpkg.json" | sha256sum | cut -c1-16)"
-          } >> "$GITHUB_OUTPUT"
-          git clone --quiet "https://github.com/${{ inputs.benchmarks_repo }}.git" "$WORK/web-benchmarks"
-          git -C "$WORK/web-benchmarks" checkout --quiet --detach "${{ inputs.benchmarks_ref }}"
-          {
-            echo "### Revisions"
-            echo
-            echo "- Head: ${head} (${LADYBIRD_REPO} ${LADYBIRD_REF:-master})"
-            echo "- Base: ${base}"
-            echo "- Benchmarks: $(git -C "$WORK/web-benchmarks" rev-parse --short HEAD)"
-            echo "- Image: ${image}"
-            echo
-          } >> "$GITHUB_STEP_SUMMARY"
+        run: bash harness/ci/checkout.sh
 
       - name: Pull the CI image
         run: docker pull --quiet "${{ steps.revisions.outputs.image }}"
@@ -158,7 +113,7 @@ jobs:
         run: |
           docker run --rm --init --shm-size=4g -v "$WORK:/work" -v "$GITHUB_WORKSPACE/harness/ci:/ci:ro" \
               -e MODE -e HEAD_SHA -e BASE_SHA -e ROUNDS -e BENCHMARKS -e FOCUS \
-              "${{ steps.revisions.outputs.image }}" bash /ci/in-container.sh build
+              "${{ steps.revisions.outputs.image }}" bash /ci/phase.sh build
 
       # The container runs as root; let the runner user read what it wrote, for the cache saves and the upload.
       - name: Make the container's files readable
@@ -190,7 +145,7 @@ jobs:
         run: |
           docker run --rm --init --shm-size=4g -v "$WORK:/work" -v "$GITHUB_WORKSPACE/harness/ci:/ci:ro" \
               -e MODE -e HEAD_SHA -e BASE_SHA -e ROUNDS -e BENCHMARKS -e FOCUS \
-              "${{ steps.revisions.outputs.image }}" bash /ci/in-container.sh measure
+              "${{ steps.revisions.outputs.image }}" bash /ci/phase.sh measure
 
       - name: Save the calibration record
         if: inputs.mode == 'calibrate' && success() && hashFiles('work/cache/ladybird-bench/noise-floor.json') != ''
@@ -202,18 +157,161 @@ jobs:
       - name: Summarize
         if: always()
         run: |
-          {
-            if [ -f "$WORK/out/bench_pr.log" ]; then
-              echo "### Result"
-              echo
-              echo '```'
-              grep -E '^(A-vs-A calibration|false movers|  [^ ].*[+-][0-9.]+%$)|BLOCKING|warning:' "$WORK/out/bench_pr.log" || true
-              echo '```'
-              echo
-            fi
-            [ -f "$WORK/out/pr-perf-section.md" ] && cat "$WORK/out/pr-perf-section.md"
-          } >> "$GITHUB_STEP_SUMMARY"
           sudo chmod -R a+rX "$WORK/out" "$WORK/cache/ladybird-bench" 2>/dev/null || true
+          bash harness/ci/summarize.sh
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-${{ inputs.mode }}-${{ inputs.runner }}-${{ github.run_id }}
+          path: |
+            work/out/
+            work/cache/ladybird-bench/*.log
+            work/cache/ladybird-bench/*.json
+            work/cache/ladybird-bench/*..*/
+          if-no-files-found: warn
+          retention-days: 90
+
+  macos:
+    if: startsWith(inputs.runner, 'macos')
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          path: harness
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      # The image carries several Xcodes and the Android SDK; two LTO trees need the room more.
+      - name: Free disk space and quiet the machine
+        run: |
+          selected=$(realpath "$(xcode-select -p)/../..")
+          for xcode in /Applications/Xcode*.app; do
+            [ "$(realpath "$xcode")" = "$selected" ] || sudo rm -rf "$xcode"
+          done
+          sudo rm -rf "$HOME/Library/Android" /usr/local/share/dotnet "$HOME/.dotnet"
+          sudo mdutil -a -i off > /dev/null || true
+          xcodebuild -version
+          df -h "$GITHUB_WORKSPACE"
+
+      - name: Describe the machine
+        id: machine
+        run: bash harness/ci/describe-machine.sh
+
+      - name: Check out Ladybird and the benchmarks
+        id: revisions
+        run: bash harness/ci/checkout.sh
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          brew update --quiet
+          brew unlink openssl@3 || true
+          brew install --quiet autoconf autoconf-archive automake bash ccache coreutils libtool llvm@22 nasm ninja \
+              pkg-config sccache unzip
+          python3 -m pip install --quiet pyyaml requests six cryptography
+
+          version=1.243.0
+          name=wasm-tools-${version}-aarch64-macos
+          curl --fail --silent --show-error --location --retry 3 --output "$RUNNER_TEMP/$name.tar.gz" \
+              "https://github.com/bytecodealliance/wasm-tools/releases/download/v${version}/${name}.tar.gz"
+          tar -xzf "$RUNNER_TEMP/$name.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$name" >> "$GITHUB_PATH"
+
+      # Both arms' pinned toolchains, with the components each rust-toolchain.toml names.
+      - name: Install the Rust toolchains
+        env:
+          HEAD_SHA: ${{ steps.revisions.outputs.head }}
+          BASE_SHA: ${{ steps.revisions.outputs.base }}
+        run: |
+          if ! command -v rustup > /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+          fi
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          for sha in "$BASE_SHA" "$HEAD_SHA"; do
+            dir=$RUNNER_TEMP/rust-$sha
+            mkdir -p "$dir"
+            git -C "$WORK/src" show "$sha:rust-toolchain.toml" > "$dir/rust-toolchain.toml"
+            (cd "$dir" && rustup toolchain install)
+          done
+
+      - name: Restore the compiler caches
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            work/cache/ccache
+            work/cache/sccache
+          key: compilers-${{ steps.machine.outputs.cpu_key }}-${{ github.run_id }}
+          restore-keys: compilers-${{ steps.machine.outputs.cpu_key }}-
+
+      - name: Restore the vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: work/cache/vcpkg/archives
+          key: vcpkg-${{ inputs.runner }}-${{ steps.revisions.outputs.vcpkg_key }}
+          restore-keys: vcpkg-${{ inputs.runner }}-
+
+      - name: Restore the calibration record
+        if: inputs.mode == 'compare'
+        uses: actions/cache/restore@v6
+        with:
+          path: work/cache/ladybird-bench/noise-floor.json
+          key: noise-floor-${{ inputs.runner }}-${{ github.run_id }}
+          restore-keys: noise-floor-${{ inputs.runner }}-
+
+      - name: Build both arms
+        id: build
+        timeout-minutes: 240
+        env:
+          HEAD_SHA: ${{ steps.revisions.outputs.head }}
+          BASE_SHA: ${{ steps.revisions.outputs.base }}
+        run: bash harness/ci/phase.sh build
+
+      # Saved even when the build failed or timed out, so the next run starts warm.
+      - name: Save the compiler caches
+        if: always() && steps.build.outcome != 'skipped'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            work/cache/ccache
+            work/cache/sccache
+          key: compilers-${{ steps.machine.outputs.cpu_key }}-${{ github.run_id }}
+
+      - name: Save the vcpkg packages
+        if: always() && steps.build.outcome != 'skipped' && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: work/cache/vcpkg/archives
+          key: vcpkg-${{ inputs.runner }}-${{ steps.revisions.outputs.vcpkg_key }}
+
+      - name: Measure
+        timeout-minutes: 110
+        env:
+          HEAD_SHA: ${{ steps.revisions.outputs.head }}
+          BASE_SHA: ${{ steps.revisions.outputs.base }}
+        run: bash harness/ci/phase.sh measure
+
+      - name: Save the calibration record
+        if: inputs.mode == 'calibrate' && success() && hashFiles('work/cache/ladybird-bench/noise-floor.json') != ''
+        uses: actions/cache/save@v6
+        with:
+          path: work/cache/ladybird-bench/noise-floor.json
+          key: noise-floor-${{ inputs.runner }}-${{ github.run_id }}
+
+      - name: Summarize
+        if: always()
+        run: bash harness/ci/summarize.sh
 
       - name: Upload results
         if: always()
